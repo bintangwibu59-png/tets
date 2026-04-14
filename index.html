@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Gesture Recognition | HJ - SL</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, #0a0f1e 0%, #0a0a1a 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            width: 100%;
+            background: rgba(10, 20, 35, 0.6);
+            backdrop-filter: blur(10px);
+            border-radius: 32px;
+            border: 1px solid rgba(80, 120, 255, 0.3);
+            padding: 24px;
+            box-shadow: 0 25px 45px rgba(0,0,0,0.3);
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 1.8rem;
+            background: linear-gradient(135deg, #fff, #8aabff);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #8a9bcf;
+            margin-bottom: 20px;
+            font-size: 0.85rem;
+        }
+
+        .video-wrapper {
+            position: relative;
+            background: #000;
+            border-radius: 24px;
+            overflow: hidden;
+            aspect-ratio: 16 / 12;
+            max-height: 480px;
+            border: 2px solid rgba(80, 120, 255, 0.5);
+        }
+
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        canvas {
+            z-index: 10;
+        }
+
+        .roi-label {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: rgba(0,255,0,0.6);
+            color: #000;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        .control-panel {
+            margin-top: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .prediction-card {
+            background: rgba(0,0,0,0.5);
+            border-radius: 20px;
+            padding: 12px 20px;
+            flex: 2;
+            min-width: 180px;
+        }
+
+        .gesture-name {
+            font-size: 1.8rem;
+            font-weight: bold;
+            font-family: monospace;
+            letter-spacing: 2px;
+        }
+
+        .confidence-bar {
+            width: 100%;
+            height: 8px;
+            background: #2a2a3a;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .confidence-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #00ff88, #00cc66);
+            transition: width 0.2s ease;
+        }
+
+        .status-badge {
+            background: #1a2a4a;
+            padding: 8px 16px;
+            border-radius: 40px;
+            font-size: 0.8rem;
+        }
+
+        button {
+            background: rgba(80, 120, 255, 0.8);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 40px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            background: #5f7aff;
+            transform: scale(1.02);
+        }
+
+        .audio-status {
+            font-size: 0.7rem;
+            color: #88ffaa;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 16px; }
+            .gesture-name { font-size: 1.2rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>✋ Gesture Recognition ✋</h1>
+    <div class="subtitle">HJ | SL — Real-time + Suara</div>
+
+    <div class="video-wrapper">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+        <div class="roi-label">🎯 Hand ROI (kotak hijau)</div>
+    </div>
+
+    <div class="control-panel">
+        <div class="prediction-card">
+            <div style="font-size:0.7rem; opacity:0.7;">HASIL PREDIKSI</div>
+            <div class="gesture-name" id="gestureLabel">---</div>
+            <div class="confidence-bar">
+                <div class="confidence-fill" id="confidenceFill"></div>
+            </div>
+            <div id="confidenceText" style="font-size:0.7rem; margin-top:5px;">confidence: 0%</div>
+        </div>
+        <div class="status-badge">
+            <i class="fas fa-microphone-alt"></i> Audio: <span id="audioStatus">siap</span>
+        </div>
+        <button id="resetBtn">⟳ Reset Smoothing</button>
+    </div>
+    <div style="margin-top: 12px; font-size:0.7rem; text-align:center; color:#6a7aae;">
+        📍 Area tangan dalam kotak hijau | Prediksi stabil | Suara otomatis (hj.mp3, sl.mp3)
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+<script>
+    // ========== KONFIGURASI ==========
+    const IMAGE_SIZE = 224;
+    const CONF_THRESHOLD = 0.5;
+    const SMOOTHING_WINDOW = 5;
+    const AUDIO_COOLDOWN = 1500; // ms
+
+    let model = null;
+    let labels = ["hj", "sl"]; // urutan output model (pd sudah dihapus)
+
+    // state
+    let predictionBuffer = [];
+    let lastPrediction = null;
+    let lastAudioTime = 0;
+
+    // elemen DOM
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const gestureLabelDiv = document.getElementById('gestureLabel');
+    const confidenceFill = document.getElementById('confidenceFill');
+    const confidenceTextSpan = document.getElementById('confidenceText');
+    const audioStatusSpan = document.getElementById('audioStatus');
+
+    // ROI (tengah frame)
+    let roi = { x: 120, y: 80, w: 220, h: 220 };
+
+    // fungsi load model
+    async function loadModel() {
+        try {
+            // Ganti path ini dengan file model.json Anda (hasil konversi keras.h5 ke tensorflowjs)
+            // Contoh: model = await tf.loadLayersModel('https://your-server/model.json');
+            // Untuk demo lokal, kita buat dummy model (random)
+            console.warn("Menggunakan dummy model (random). Ganti dengan model nyata via tf.loadLayersModel");
+            // DUMMY MODEL: simulasi output random untuk testing
+            return {
+                predict: async (imgTensor) => {
+                    // dummy: return random confidence (2 kelas: hj, sl)
+                    const rand = Math.random();
+                    let idx = rand < 0.5 ? 0 : 1;
+                    const probs = [0.1, 0.1];
+                    probs[idx] = 0.6 + Math.random() * 0.3;
+                    return { dataSync: () => probs };
+                }
+            };
+        } catch(e) {
+            console.error("Gagal load model:", e);
+            return null;
+        }
+    }
+
+    // Preprocess frame dari canvas / video
+    async function preprocessFrame(imgData) {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = IMAGE_SIZE;
+        tempCanvas.height = IMAGE_SIZE;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(imgData, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
+        const pixels = tempCtx.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE);
+        let tensor = tf.browser.fromPixels(pixels, 3);
+        tensor = tensor.toFloat().div(255.0);
+        tensor = tensor.expandDims(0);
+        return tensor;
+    }
+
+    // mainkan audio (Web Audio API)
+    function playAudio(label) {
+        const audioMap = {
+            "hj": "hj.mp3",
+            "sl": "sl.mp3"
+        };
+        const src = audioMap[label];
+        if (!src) return;
+        const audio = new Audio(src);
+        audio.play().catch(e => console.warn("Audio play error:", e));
+        audioStatusSpan.innerText = `🔊 ${label}`;
+        setTimeout(() => {
+            if (audioStatusSpan.innerText === `🔊 ${label}`) audioStatusSpan.innerText = "siap";
+        }, 1000);
+    }
+
+    // proses prediksi dari ROI
+    async function predictGesture(roiImageData) {
+        if (!model) return { label: "unknown", confidence: 0 };
+        try {
+            const tensor = await preprocessFrame(roiImageData);
+            const predictions = await model.predict(tensor);
+            const probs = await predictions.dataSync();
+            tf.dispose(tensor);
+            tf.dispose(predictions);
+            const maxIdx = probs.indexOf(Math.max(...probs));
+            const confidence = probs[maxIdx];
+            if (confidence >= CONF_THRESHOLD) {
+                return { label: labels[maxIdx], confidence };
+            } else {
+                return { label: "unknown", confidence };
+            }
+        } catch(e) {
+            console.error("prediksi error", e);
+            return { label: "unknown", confidence: 0 };
+        }
+    }
+
+    // smoothing & audio logic
+    function updateSmoothing(currentLabel, confidence) {
+        predictionBuffer.push(currentLabel);
+        if (predictionBuffer.length > SMOOTHING_WINDOW) predictionBuffer.shift();
+
+        if (predictionBuffer.length === SMOOTHING_WINDOW) {
+            const counts = {};
+            for (let l of predictionBuffer) {
+                counts[l] = (counts[l] || 0) + 1;
+            }
+            let bestLabel = "unknown";
+            let bestCount = 0;
+            for (let [l, c] of Object.entries(counts)) {
+                if (c > bestCount && l !== "unknown") {
+                    bestCount = c;
+                    bestLabel = l;
+                }
+            }
+            const finalLabel = (bestCount >= 3) ? bestLabel : "unknown";
+
+            // update UI
+            if (finalLabel !== "unknown") {
+                gestureLabelDiv.innerText = finalLabel.toUpperCase();
+                gestureLabelDiv.style.color = "#88ffaa";
+            } else {
+                gestureLabelDiv.innerText = "---";
+                gestureLabelDiv.style.color = "#aaa";
+            }
+            confidenceFill.style.width = `${confidence * 100}%`;
+            confidenceTextSpan.innerText = `confidence: ${Math.round(confidence*100)}%`;
+
+            // audio trigger
+            const now = Date.now();
+            if (finalLabel !== "unknown" && finalLabel !== lastPrediction && (now - lastAudioTime) >= AUDIO_COOLDOWN) {
+                playAudio(finalLabel);
+                lastAudioTime = now;
+                lastPrediction = finalLabel;
+            }
+        }
+    }
+
+    // gambar ROI & ambil data gambar untuk prediksi
+    function drawROIAndPredict() {
+        if (!video.videoWidth) return;
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        ctx.strokeStyle = "#00ff66";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+        ctx.fillStyle = "rgba(0,255,100,0.2)";
+        ctx.fillRect(roi.x, roi.y, roi.w, roi.h);
+        ctx.fillStyle = "#00ff66";
+        ctx.font = "14px monospace";
+        ctx.fillText("✋ GESTURE AREA", roi.x+5, roi.y-5);
+
+        try {
+            const roiImageData = ctx.getImageData(roi.x, roi.y, roi.w, roi.h);
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = roi.w;
+            offCanvas.height = roi.h;
+            const offCtx = offCanvas.getContext('2d');
+            offCtx.putImageData(roiImageData, 0, 0);
+            offCanvas.toBlob(async (blob) => {
+                const imgBitmap = await createImageBitmap(blob);
+                const result = await predictGesture(imgBitmap);
+                updateSmoothing(result.label, result.confidence);
+            }, 'image/png');
+        } catch(e) {
+            console.warn("gagal ambil ROI");
+        }
+    }
+
+    function predictionLoop() {
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            drawROIAndPredict();
+        }
+        requestAnimationFrame(predictionLoop);
+    }
+
+    async function initCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+            video.srcObject = stream;
+            await new Promise((resolve) => {
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    resolve();
+                };
+            });
+            roi = {
+                x: Math.floor(video.videoWidth * 0.3),
+                y: Math.floor(video.videoHeight * 0.2),
+                w: Math.floor(video.videoWidth * 0.4),
+                h: Math.floor(video.videoHeight * 0.5)
+            };
+            console.log("Kamera aktif, ROI:", roi);
+        } catch(err) {
+            console.error("gagal akses kamera:", err);
+            alert("Tidak dapat mengakses kamera. Pastikan izin diberikan.");
+        }
+    }
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+        predictionBuffer = [];
+        lastPrediction = null;
+        gestureLabelDiv.innerText = "---";
+        confidenceFill.style.width = "0%";
+        confidenceTextSpan.innerText = "confidence: 0%";
+        audioStatusSpan.innerText = "reset";
+        setTimeout(() => { if(audioStatusSpan.innerText === "reset") audioStatusSpan.innerText = "siap"; }, 800);
+        console.log("Smoothing buffer direset");
+    });
+
+    window.onload = async () => {
+        await initCamera();
+        model = await loadModel();
+        predictionLoop();
+    };
+</script>
+</body>
+</html>
